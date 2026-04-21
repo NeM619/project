@@ -50,6 +50,11 @@ A sophisticated Resume Analysis application built with React and Vite, powered b
 - Keyword strategies
 - Visibility improvements
 
+🔍 **Advanced PDF Processing**
+- Text extraction from PDF documents
+- Multi-page document processing
+- Progress indicators for processing
+
 ## Getting Started
 
 ### Prerequisites
@@ -119,7 +124,9 @@ npm run preview
 
 - **Frontend:** React 18.2
 - **Build Tool:** Vite 5.0
-- **AI Engine:** Anthropic Claude (API)
+- **AI Engine:** Groq API (Llama models)
+- **PDF Processing:** pdf-parse (Node.js)
+- **Document Parsing:** JSZip, docx
 - **Styling:** CSS-in-JS (inline styles)
 - **Design:** Modern glassmorphism UI with gradient accents
 
@@ -221,7 +228,7 @@ npm run dev -- --port 3000
 
 ## Future Enhancements
 
-- [ ] PDF parsing with OCR
+- [ ] PDF parsing with OCR for scanned documents
 - [ ] Real-time score updates
 - [ ] Resume template suggestions
 - [ ] Career path recommendations

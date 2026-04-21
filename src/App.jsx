@@ -87,6 +87,41 @@ const parseDoc = async (file) => {
   return text.replace(/[^\x20-\x7E\n]/g, "");
 };
 
+const parsePDF = async (file) => {
+  try {
+    console.log('📄 Sending PDF to backend for parsing...');
+
+    // Create FormData for file upload
+    const formData = new FormData();
+    formData.append('pdf', file);
+
+    // Send to backend
+    const response = await fetch('http://localhost:3001/api/parse-pdf', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(`Backend error: ${response.status} - ${errorData.error}`);
+    }
+
+    const result = await response.json();
+
+    if (!result.text || result.text.trim().length < 50) {
+      console.log('📄 Minimal text found, OCR may be needed but not implemented in backend yet');
+      // For now, return what we have
+      return result.text || '';
+    }
+
+    return result.text;
+
+  } catch (error) {
+    console.error('PDF parsing error:', error);
+    throw new Error('Failed to parse PDF. Please try pasting the text directly.');
+  }
+};
+
 /* ── PROMPTS ─────────────────────────────────────────────────────────────── */
 const MAIN_PROMPT = (region, level) => `You are an expert resume analyst. Analyze this resume for a ${level} candidate targeting the ${region} job market. Return ONLY valid JSON, no markdown, no preamble:
 {"overallScore":<0-100>,"name":"<name or Unknown>","title":"<detected role>","experienceLevel":"<Fresher|Mid-level|Senior>","region":"<detected region>","categoryScores":{"formatting":<0-100>,"content":<0-100>,"impact":<0-100>,"keywords":<0-100>,"completeness":<0-100>},"atsScore":<0-100>,"atsIssues":["<issue>"],"atsKeywordsMissing":["<kw>"],"benchmarkPercentile":<0-100>,"benchmarkField":"<field>","strengths":["<s>"],"improvements":[{"priority":"high|medium|low","area":"<area>","suggestion":"<detail>"}],"corrections":[{"type":"grammar|formatting|content|structure","issue":"<issue>","fix":"<fix>"}],"bulletRewrites":[{"original":"<orig>","rewritten":"<STAR rewrite>","verb":"<verb>"}],"skillsGap":[{"skill":"<skill>","importance":"high|medium","course":"<resource>"}],"jobSuggestions":[{"title":"<title>","match":<0-100>,"reason":"<reason>","companies":["<c1>","<c2>","<c3>"]}],"linkedinTips":["<tip>"],"summary":"<2-3 sentence assessment>"}`;
@@ -312,6 +347,8 @@ function UploadZone({ onText }) {
   const [paste, setPaste] = useState(false);
   const [txt, setTxt] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState("");
 
   const handle = async f => { 
     if (!f) return;
@@ -319,33 +356,43 @@ function UploadZone({ onText }) {
     
     const fileName = f.name.toLowerCase();
     const fileType = f.type;
-    const supportedTypes = [".txt", ".doc", ".docx"];
+    const supportedTypes = [".txt", ".doc", ".docx", ".pdf"];
     const isSupportedFormat = supportedTypes.some(ext => fileName.endsWith(ext));
     
     if (!isSupportedFormat) {
-      setError("⚠️ Unsupported file format. Supported formats: TXT, DOC, DOCX. For PDF files, please paste the text directly.");
+      setError("⚠️ Unsupported file format. Supported formats: TXT, DOC, DOCX, PDF. For other formats, please paste the text directly.");
       return;
     }
     
     try {
+      setLoading(true);
       let text = "";
       
       if (fileName.endsWith(".docx")) {
+        setLoadingMessage("Reading Word document...");
         text = await parseDOCX(f);
       } else if (fileName.endsWith(".doc")) {
+        setLoadingMessage("Reading legacy Word document...");
         text = await parseDoc(f);
+      } else if (fileName.endsWith(".pdf")) {
+        setLoadingMessage("Extracting text from PDF...");
+        text = await parsePDF(f);
       } else {
+        setLoadingMessage("Reading text file...");
         text = await f.text();
       }
       
       if (!text.trim()) {
         setError("❌ File is empty. Please upload a resume with content.");
+        setLoading(false);
         return;
       }
       onText(text);
+      setLoading(false);
     } catch (e) {
       console.error("File parsing error:", e);
       setError("❌ Failed to read file. Please try another file or paste your resume text instead.");
+      setLoading(false);
     }
   };
 
@@ -372,14 +419,25 @@ function UploadZone({ onText }) {
         boxShadow: drag ? "0 0 40px rgba(78,236,200,0.1) inset" : "none"
       }}>
       {error && <div style={{ padding: "12px 16px", background: "rgba(251,113,133,0.1)", border: "1px solid rgba(251,113,133,0.3)", borderRadius: 10, fontSize: 13, color: "rgba(251,113,133,1)", fontFamily: "'Outfit',sans-serif", marginBottom: 16 }}>{error}</div>}
-      <input ref={fRef} type="file" accept=".txt,.doc,.docx" style={{ display: "none" }} onChange={e => handle(e.target.files[0])} />
-      {/* upload icon */}
-      <div style={{ width: 64, height: 64, borderRadius: 18, background: drag ? "rgba(78,236,200,0.15)" : "rgba(255,255,255,0.05)", border: `1px solid ${drag ? "rgba(78,236,200,0.4)" : "rgba(255,255,255,0.1)"}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 18px", fontSize: 28, transition: "all 0.3s", animation: drag ? "none" : "float 3s ease-in-out infinite" }}>📄</div>
-      <p style={{ color: C.text, fontFamily: "'Outfit',sans-serif", fontSize: 16, fontWeight: 500, margin: "0 0 6px" }}>
-        Drop your resume or <span style={{ color: C.teal, borderBottom: `1px solid ${C.teal}44` }}>browse files</span>
-      </p>
-      <p style={{ color: C.textMut, fontSize: 13, fontFamily: "'Outfit',sans-serif", margin: "0 0 22px" }}>TXT · DOC · DOCX</p>
-      <Btn variant="ghost" size="sm" onClick={e => { e.stopPropagation(); setPaste(true); }}>✍️ Paste text instead</Btn>
+      
+      {loading ? (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
+          <div style={{ width: 48, height: 48, border: `3px solid rgba(78,236,200,0.2)`, borderTop: `3px solid ${C.teal}`, borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+          <p style={{ color: C.text, fontFamily: "'Outfit',sans-serif", fontSize: 14, fontWeight: 500 }}>{loadingMessage}</p>
+          <p style={{ color: C.textMut, fontSize: 12, fontFamily: "'Outfit',sans-serif" }}>This may take a few moments for image-based PDFs...</p>
+        </div>
+      ) : (
+        <>
+          <input ref={fRef} type="file" accept=".txt,.doc,.docx,.pdf" style={{ display: "none" }} onChange={e => handle(e.target.files[0])} />
+          {/* upload icon */}
+          <div style={{ width: 64, height: 64, borderRadius: 18, background: drag ? "rgba(78,236,200,0.15)" : "rgba(255,255,255,0.05)", border: `1px solid ${drag ? "rgba(78,236,200,0.4)" : "rgba(255,255,255,0.1)"}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 18px", fontSize: 28, transition: "all 0.3s", animation: drag ? "none" : "float 3s ease-in-out infinite" }}>📄</div>
+          <p style={{ color: C.text, fontFamily: "'Outfit',sans-serif", fontSize: 16, fontWeight: 500, margin: "0 0 6px" }}>
+            Drop your resume or <span style={{ color: C.teal, borderBottom: `1px solid ${C.teal}44` }}>browse files</span>
+          </p>
+          <p style={{ color: C.textMut, fontSize: 13, fontFamily: "'Outfit',sans-serif", margin: "0 0 22px" }}>TXT · DOC · DOCX · PDF</p>
+          <Btn variant="ghost" size="sm" onClick={e => { e.stopPropagation(); setPaste(true); }}>✍️ Paste text instead</Btn>
+        </>
+      )}
     </div>
   );
 }

@@ -3,6 +3,10 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
+import readline from 'readline';
+import pdfParse from 'pdf-parse';
+import multer from 'multer';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -13,22 +17,43 @@ const app = express();
 const PORT = 3001;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' })); // Increase limit for PDF uploads
 
-const ANTHROPIC_API_KEY = process.env.VITE_GROQ_API_KEY || process.env.GROQ_API_KEY;
+let GROQ_API_KEY = process.env.VITE_GROQ_API_KEY || process.env.GROQ_API_KEY;
 
 console.log('Environment check:');
 console.log('- VITE_GROQ_API_KEY present:', !!process.env.VITE_GROQ_API_KEY);
 console.log('- GROQ_API_KEY present:', !!process.env.GROQ_API_KEY);
 
-if (!ANTHROPIC_API_KEY) {
-  console.error('\n❌ ERROR: Groq API key not found in environment variables');
-  console.error('Please make sure your .env.local file contains:');
-  console.error('VITE_GROQ_API_KEY=your_groq_api_key_here\n');
-  process.exit(1);
+if (GROQ_API_KEY) {
+  console.log('✅ API key loaded successfully\n');
 }
 
-console.log('✅ API key loaded successfully\n');
+async function ensureApiKey() {
+  if (!GROQ_API_KEY) {
+    console.log('\n🔑 Groq API key not found. Please enter it below:');
+
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    return new Promise((resolve) => {
+      rl.question('Enter your Groq API key: ', (key) => {
+        const envContent = `VITE_GROQ_API_KEY=${key.trim()}\n`;
+        fs.writeFileSync(path.join(__dirname, '.env.local'), envContent);
+        console.log('✅ API key saved to .env.local for future use\n');
+
+        // Reload environment variables
+        dotenv.config({ path: path.join(__dirname, '.env.local') });
+        GROQ_API_KEY = process.env.VITE_GROQ_API_KEY || process.env.GROQ_API_KEY;
+
+        rl.close();
+        resolve();
+      });
+    });
+  }
+}
 
 app.post('/api/analyze', async (req, res) => {
   try {
@@ -48,7 +73,7 @@ app.post('/api/analyze', async (req, res) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${ANTHROPIC_API_KEY}`
+        'Authorization': `Bearer ${GROQ_API_KEY}`
       },
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
@@ -77,11 +102,42 @@ app.post('/api/analyze', async (req, res) => {
   }
 });
 
+app.post('/api/parse-pdf', multer().single('pdf'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No PDF file provided' });
+    }
+
+    console.log('📄 Parsing PDF, file size:', req.file.size);
+
+    // Parse PDF directly from buffer
+    const data = await pdfParse(req.file.buffer);
+    const extractedText = data.text || '';
+
+    console.log('📄 PDF parsed successfully, text length:', extractedText.length);
+
+    res.json({
+      text: extractedText,
+      pages: data.numpages,
+      info: data.info
+    });
+
+  } catch (error) {
+    console.error('PDF Parse Error:', error);
+    res.status(500).json({ error: 'Failed to parse PDF: ' + error.message });
+  }
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Resume Analyzer Backend Running' });
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ Resume Analyzer Backend running on http://localhost:${PORT}`);
-  console.log(`📡 API endpoint: http://localhost:${PORT}/api/analyze`);
-});
+// Start server after ensuring API key
+(async () => {
+  await ensureApiKey();
+  
+  app.listen(PORT, () => {
+    console.log(`✅ Resume Analyzer Backend running on http://localhost:${PORT}`);
+    console.log(`📡 API endpoint: http://localhost:${PORT}/api/analyze`);
+  });
+})();
